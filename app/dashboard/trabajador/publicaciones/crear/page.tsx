@@ -9,6 +9,9 @@ type FieldErrors = Partial<Record<
   string
 >>;
 
+const CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUD_NAME!;
+const CLOUD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_PRESET!;
+
 export default function CrearPublicacionPage() {
   const router = useRouter();
 
@@ -30,7 +33,7 @@ export default function CrearPublicacionPage() {
 
   const validateImage = (file: File) => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
-    const maxMB = 4; // ⬅️ alineado con el backend/Netlify
+    const maxMB = 4; // ⬅️ Netlify functions ~6MB request; 4MB es seguro
     if (!allowed.includes(file.type)) return 'Formato no permitido (usa JPG, PNG o WEBP).';
     if (file.size > maxMB * 1024 * 1024) return `La imagen no debe pesar más de ${maxMB}MB.`;
     if (file.size === 0) return 'No se recibió archivo de imagen.';
@@ -41,7 +44,7 @@ export default function CrearPublicacionPage() {
     const file = e.target.files?.[0];
     setFieldErrors((prev) => ({ ...prev, imagen: '' }));
     if (file) {
-      if (file.size === 0) { // evita enviar “archivo vacío”
+      if (file.size === 0) {
         setImagen(null);
         setPreview(null);
         setFieldErrors((prev) => ({ ...prev, imagen: 'No se recibió archivo de imagen.' }));
@@ -74,6 +77,41 @@ export default function CrearPublicacionPage() {
     return errs;
   };
 
+  // 1) Subir a Cloudinary (cliente) con preset unsigned
+  const uploadToCloudinary = async (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('upload_preset', CLOUD_PRESET);
+    // si en tu preset permitiste carpeta, puedes usar:
+    // fd.append('folder', 'usuarios'); // opcional
+
+    const resp = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, {
+      method: 'POST',
+      body: fd,
+    });
+
+    const data = await resp.json();
+    if (!resp.ok) {
+      const msg = data?.error?.message || JSON.stringify(data).slice(0, 200);
+      throw new Error(`Cloudinary: ${msg}`);
+    }
+    if (!data?.secure_url) {
+      throw new Error('Cloudinary no devolvió secure_url');
+    }
+    return { secure_url: data.secure_url as string, public_id: data.public_id as string };
+  };
+
+  // 2) Enviar a tu API solo los metadatos + URL de la imagen
+  const createPublicacion = async (payload: any, token: string | null) => {
+    return axios.post('/api/publicaciones', payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      timeout: 60_000,
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMensaje('');
@@ -87,43 +125,45 @@ export default function CrearPublicacionPage() {
       return;
     }
 
-    const formData = new FormData();
-    formData.append('titulo', titulo.trim());
-    formData.append('precio', precio.trim());
-    formData.append('disponibilidad', disponibilidad.trim());
-    formData.append('fecha', fecha);
-    formData.append('descripcion', descripcion.trim());
-    formData.append('categoria', categoria);
-    if (imagen) formData.append('imagen', imagen, imagen.name); // preserva nombre
-
     try {
       setSubmitting(true);
       const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
-      await axios.post('/api/publicaciones', formData, {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          // NO pongas Content-Type: axios lo genera por ser FormData
+      // A) SUBE IMAGEN A CLOUDINARY EN EL CLIENTE
+      let imageUrl = '';
+      let imageId = '';
+      if (imagen) {
+        const up = await uploadToCloudinary(imagen);
+        imageUrl = up.secure_url;
+        imageId = up.public_id;
+      }
+
+      // B) ENVÍA SOLO JSON A TU API (evita multipart y límites de Netlify)
+      await createPublicacion(
+        {
+          titulo: titulo.trim(),
+          descripcion: descripcion.trim(),
+          precio: Number(precio),
+          disponibilidad: disponibilidad.trim(),
+          fecha, // YYYY-MM-DD
+          categoria,
+          imagen: imageUrl,
+          publicId: imageId, // por si luego quieres borrar/actualizar
         },
-        // tiempo extra por si la red está lenta
-        timeout: 60_000,
-      });
+        token
+      );
 
       setMensaje('✅ Publicación creada con éxito');
       setTimeout(() => router.push('/dashboard/trabajador'), 1200);
     } catch (err: any) {
       console.error('Error al crear publicación:', err);
 
-      // si Netlify u otra capa devuelve HTML, axios.data puede ser string
       const raw = typeof err?.response?.data === 'string' ? err.response.data.slice(0, 160) : null;
-
       const apiMsg =
         err?.response?.data?.message ||
         err?.response?.data?.error ||
-        (err?.response?.status === 413 ? 'La imagen supera el tamaño permitido (4MB).' : null) ||
-        (err?.response?.status === 415 ? 'La solicitud debe ser multipart/form-data.' : null) ||
-        (err?.response?.status === 502 ? 'Falla al subir a Cloudinary.' : null) ||
-        (raw && raw.startsWith('<!DOCTYPE') ? 'Error del servidor (HTML). Reintenta con imagen < 4MB.' : null) ||
+        err?.message ||
+        (raw && raw.startsWith('<!DOCTYPE') ? 'Error del servidor (HTML).' : null) ||
         'Error al crear la publicación';
 
       setError(apiMsg);
