@@ -22,11 +22,11 @@
     "dotenv": "^17.2.1",
     "eslint": "^9",
     "eslint-config-next": "15.3.4",
-    "jest": "^30.0.4",
+    "jest": "^30.0.5",
     "lightningcss": "^1.26.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.11",
-    "ts-jest": "^29.4.0",
+    "ts-jest": "^29.4.1",
     "typescript": "^5"
   },
   "scripts": {
@@ -35,7 +35,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

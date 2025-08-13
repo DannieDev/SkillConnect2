@@ -28,23 +28,42 @@ function esAutor(pub: any, userId?: string) {
   return !!(pub && userId) && String(pub.trabajadorId) === String(userId);
 }
 
+// --- formato dd/MM/yyyy para las respuestas ---
+function formatFechaCorta(fecha: string | Date | undefined | null) {
+  if (!fecha) return null as any;
+  const d = new Date(fecha);
+  if (isNaN(d.getTime())) return null as any;
+  const dia = String(d.getDate()).padStart(2, '0');
+  const mes = String(d.getMonth() + 1).padStart(2, '0');
+  const anio = d.getFullYear();
+  return `${dia}/${mes}/${anio}`;
+}
+
+function serializePub(pub: any) {
+  const obj = pub?.toObject ? pub.toObject() : pub;
+  return {
+    ...obj,
+    fecha: obj?.fecha ? formatFechaCorta(obj.fecha) : obj?.fecha ?? null,
+  };
+}
+
 export async function GET(req: Request, { params }: ParamsPromise) {
   await connectDB();
-  const { id } = await params; // 👈 obligatorio
+  const { id } = await params;
 
   const user = await getUserFromAuth(req);
   if (!user) return NextResponse.json({ error: 'No autorizado (sin sesión)' }, { status: 401 });
 
   const pub = await Publicacion.findById(id);
-  if (!pub)   return NextResponse.json({ error: 'No encontrada' }, { status: 404 });
+  if (!pub) return NextResponse.json({ error: 'No encontrada' }, { status: 404 });
   if (!esAutor(pub, user.id)) return NextResponse.json({ error: 'Prohibido' }, { status: 403 });
 
-  return NextResponse.json(pub);
+  return NextResponse.json(serializePub(pub));
 }
 
 export async function PUT(req: Request, { params }: ParamsPromise) {
   await connectDB();
-  const { id } = await params; // 👈 obligatorio
+  const { id } = await params;
 
   const user = await getUserFromAuth(req);
   if (!user) return NextResponse.json({ error: 'No autorizado (sin sesión)' }, { status: 401 });
@@ -53,7 +72,7 @@ export async function PUT(req: Request, { params }: ParamsPromise) {
   const { titulo, descripcion, categoria, imagen, precio, disponibilidad, fecha } = body;
 
   const pub = await Publicacion.findById(id);
-  if (!pub)   return NextResponse.json({ error: 'No encontrada' }, { status: 404 });
+  if (!pub) return NextResponse.json({ error: 'No encontrada' }, { status: 404 });
   if (!esAutor(pub, user.id)) return NextResponse.json({ error: 'Prohibido' }, { status: 403 });
 
   if (titulo !== undefined)         pub.titulo = titulo;
@@ -62,21 +81,25 @@ export async function PUT(req: Request, { params }: ParamsPromise) {
   if (imagen !== undefined)         pub.imagen = imagen;
   if (precio !== undefined)         pub.precio = precio;
   if (disponibilidad !== undefined) pub.disponibilidad = disponibilidad;
-  if (fecha !== undefined)          pub.fecha = fecha;
+  if (fecha !== undefined) {
+    // Se guarda como Date (recomendado). Si recibes ISO, perfecto.
+    const d = new Date(fecha);
+    pub.fecha = isNaN(d.getTime()) ? fecha : d;
+  }
 
   await pub.save();
-  return NextResponse.json(pub);
+  return NextResponse.json(serializePub(pub));
 }
 
 export async function DELETE(req: Request, { params }: ParamsPromise) {
   await connectDB();
-  const { id } = await params; // 👈 obligatorio
+  const { id } = await params;
 
   const user = await getUserFromAuth(req);
   if (!user) return NextResponse.json({ error: 'No autorizado (sin sesión)' }, { status: 401 });
 
   const pub = await Publicacion.findById(id);
-  if (!pub)   return NextResponse.json({ error: 'No encontrada' }, { status: 404 });
+  if (!pub) return NextResponse.json({ error: 'No encontrada' }, { status: 404 });
   if (!esAutor(pub, user.id)) return NextResponse.json({ error: 'Prohibido' }, { status: 403 });
 
   await pub.deleteOne();

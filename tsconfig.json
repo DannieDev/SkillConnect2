@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -13,14 +17,25 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "incremental": true,
-
-    "types": ["next-auth","node"],
-    "plugins": [{ "name": "next" }],
-
-    "baseUrl": ".",                        
+    "types": [
+      "next-auth",
+      "node",
+      "jest",
+    ],
+    "noEmit": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"],
-      "@components/*": ["./app/components/*"]  // ✅ si tus componentes están en app/components
+      "@/*": [
+        "./*"
+      ],
+      "@components/*": [
+        "./app/components/*"
+      ]
     }
   },
   "include": [
@@ -28,7 +43,12 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    "types/next-auth.d.ts"
+    "types/next-auth.d.ts",
+    "__tests__/**/*.ts",
+    "__tests__/**/*.tsx",
+    "test-setup/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules"
+  ]
 }
