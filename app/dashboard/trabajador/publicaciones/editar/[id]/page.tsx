@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 
@@ -21,6 +21,13 @@ function inputToISO(fechaInput: string) {
   return d.toISOString();
 }
 
+// ENV de Cloudinary (unsigned)
+const CLOUD_NAME   = process.env.NEXT_PUBLIC_CLOUD_NAME!;
+const CLOUD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_PRESET!;
+
+const ALLOWED = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
+const MAX_MB = 4;
+
 export default function EditarPublicacionPage() {
   const router = useRouter();
   const params = useParams();
@@ -37,10 +44,14 @@ export default function EditarPublicacionPage() {
   const [imagenURL, setImagenURL] = useState('');
   const [nuevaImagen, setNuevaImagen] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+
   const [mensaje, setMensaje] = useState('');
   const [error, setError] = useState('');
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
+
+  // para limpiar blob URLs anteriores
+  const prevBlobUrl = useRef<string | null>(null);
 
   // Redirige si no hay sesión
   useEffect(() => {
@@ -88,36 +99,70 @@ export default function EditarPublicacionPage() {
   // Limpieza de objectURL
   useEffect(() => {
     return () => {
-      if (preview?.startsWith('blob:')) URL.revokeObjectURL(preview);
+      if (prevBlobUrl.current) {
+        URL.revokeObjectURL(prevBlobUrl.current);
+        prevBlobUrl.current = null;
+      }
     };
-  }, [preview]);
+  }, []);
+
+  const validateImage = (file: File) => {
+    if (!ALLOWED.includes(file.type)) return 'Formato no permitido (JPG, PNG o WEBP).';
+    if (file.size > MAX_MB * 1024 * 1024) return `La imagen no debe pesar más de ${MAX_MB}MB.`;
+    if (file.size === 0) return 'No se recibió archivo de imagen.';
+    return '';
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
+    setMensaje('');
+    setError('');
+
+    if (!file) {
+      setNuevaImagen(null);
+      setPreview(imagenURL || null);
+      return;
+    }
+
+    const v = validateImage(file);
+    if (v) {
+      setNuevaImagen(null);
+      setPreview(imagenURL || null);
+      setError(v);
+      return;
+    }
+
     setNuevaImagen(file);
-    setPreview(file ? URL.createObjectURL(file) : imagenURL || null);
+
+    // preview con blob url
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+
+    // revoca blob anterior
+    if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
+    prevBlobUrl.current = url;
   };
 
-  const subirImagen = async (file: File): Promise<string | null> => {
-    const formData = new FormData();
-    formData.append('imagen', file);
+  // Subir a Cloudinary (unsigned, desde cliente)
+  const uploadToCloudinary = async (file: File): Promise<{ secure_url: string; public_id: string }> => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('upload_preset', CLOUD_PRESET);
 
-    try {
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        console.error('❌ Error subiendo imagen:', data);
-        return null;
-      }
-      return data.secure_url || null;
-    } catch (err) {
-      console.error('❌ Error subiendo imagen:', err);
-      return null;
+    const resp = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, {
+      method: 'POST',
+      body: fd,
+    });
+
+    const data = await resp.json();
+    if (!resp.ok) {
+      const msg = data?.error?.message || JSON.stringify(data).slice(0, 200);
+      throw new Error(`Cloudinary: ${msg}`);
     }
+    if (!data?.secure_url) {
+      throw new Error('Cloudinary no devolvió secure_url');
+    }
+    return { secure_url: data.secure_url as string, public_id: data.public_id as string };
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -133,10 +178,10 @@ export default function EditarPublicacionPage() {
       setGuardando(true);
       let urlImagen = imagenURL;
 
+      // Si eligió nueva imagen, súbela primero
       if (nuevaImagen) {
-        const subida = await subirImagen(nuevaImagen);
-        if (!subida) throw new Error('No se pudo subir la nueva imagen');
-        urlImagen = subida;
+        const up = await uploadToCloudinary(nuevaImagen);
+        urlImagen = up.secure_url;
       }
 
       const fechaEnviar = fecha ? inputToISO(fecha) : undefined;
@@ -152,7 +197,7 @@ export default function EditarPublicacionPage() {
           disponibilidad,
           fecha: fechaEnviar,
           categoria,
-          imagen: urlImagen,
+          imagen: urlImagen, // si no cambiaste la imagen, manda la existente
         }),
       });
 
@@ -259,7 +304,7 @@ export default function EditarPublicacionPage() {
             </select>
           </div>
 
-          {/* Imagen (mismo estilo del crear) */}
+          {/* Imagen */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Imagen</label>
             <div className="flex items-center gap-3">
