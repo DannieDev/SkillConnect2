@@ -1,3 +1,4 @@
+// lib/uploadImage.ts
 import { v2 as cloudinary } from 'cloudinary';
 
 cloudinary.config({
@@ -23,8 +24,18 @@ export async function subirImagenBuffer(
         overwrite: true,
         timeout: 60_000,
       },
-      (err, result) => {
-        if (err) return reject(err);
+      (err: any, result: any) => {
+        if (err) {
+          // 🔎 LOG DETALLADO
+          console.error('Cloudinary error:', {
+            http_code: err?.http_code,
+            name: err?.name,
+            message: err?.message,
+            error: err?.error,          // a veces viene aquí el payload: { message, ... }
+            stack: err?.stack,
+          });
+          return reject(err);
+        }
         if (!result) return reject(new Error('Respuesta vacía de Cloudinary'));
         resolve({ secure_url: result.secure_url, public_id: result.public_id });
       }
