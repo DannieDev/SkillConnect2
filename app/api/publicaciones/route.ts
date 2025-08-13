@@ -7,40 +7,22 @@ import { authOptions } from '@/lib/authOptions';
 import dbConnect from '@/lib/dbConnect';
 import Publicacion from '@/models/publicacion';
 import { verifyToken } from '@/middlewares/verifyToken';
-import { subirImagen } from '@/lib/uploadImage';
-
-import formidable from 'formidable';
-import { Readable } from 'stream';
+import { subirImagenBuffer } from '@/lib/uploadImage'; // ⬅️ nueva función buffer/stream
 
 export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic'; // este endpoint no debe cachearse
+export const dynamic = 'force-dynamic';
 
-// ---- utils ----
-function parseForm(req: Request, headers: Headers): Promise<[any, any]> {
-  return new Promise((resolve, reject) => {
-    const form = formidable({ multiples: false, keepExtensions: true });
-
-    const stream = Readable.fromWeb(req.body as any);
-    const nodeReq: any = stream;
-    nodeReq.headers = Object.fromEntries(headers.entries());
-
-    form.parse(nodeReq, (err, fields, files) => {
-      if (err) return reject(err);
-      resolve([fields, files]);
-    });
-  });
-}
-
+// ---- helpers de auth ----
 async function getUserFromAuth(req: Request) {
-  // 1) Sesión NextAuth (DB o JWT, vía getServerSession)
+  // 1) Sesión NextAuth (App Router)
   const session = await getServerSession(authOptions);
   if (session?.user) {
-    const id = (session.user as any).id ?? (session as any).user?.id ?? (session as any).user?.sub;
+    const id = (session.user as any).id ?? (session as any).user?.sub ?? (session as any).user?.id;
     const rol = (session.user as any).rol;
     if (id) return { id: String(id), rol };
   }
 
-  // 2) JWT NextAuth (getToken) si usas strategy: 'jwt'
+  // 2) JWT NextAuth (strategy: 'jwt')
   const jwt = await getToken({ req: req as any, secret: process.env.NEXTAUTH_SECRET });
   if (jwt) {
     const id = (jwt as any).id ?? jwt.sub;
@@ -48,7 +30,7 @@ async function getUserFromAuth(req: Request) {
     if (id) return { id: String(id), rol };
   }
 
-  // 3) Fallback a tu Bearer propio (compatibilidad)
+  // 3) Bearer propio (compatibilidad)
   const authHeader = req.headers.get('authorization');
   if (authHeader?.startsWith('Bearer ')) {
     const raw = authHeader.split(' ')[1];
@@ -59,9 +41,27 @@ async function getUserFromAuth(req: Request) {
   return null;
 }
 
-// ---- POST ----
+// --- validaciones y constantes ---
+const CATEGORIAS = new Set(['Limpieza', 'Electricidad', 'Jardinería', 'Plomería']);
+const isValidDate = (d: string) => !Number.isNaN(Date.parse(d));
+const isPastDate = (d: string) => new Date(d).setHours(0, 0, 0, 0) < new Date().setHours(0, 0, 0, 0);
+const ALLOWED_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+
+// ---- POST: crear publicación ----
 export async function POST(req: Request) {
   try {
+    // Guardas tempranas: Content-Type y ENV críticas
+    const ct = req.headers.get('content-type') || '';
+    if (!ct.toLowerCase().includes('multipart/form-data')) {
+      return NextResponse.json({ error: 'Content-Type debe ser multipart/form-data' }, { status: 415 });
+    }
+
+    for (const k of ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET']) {
+      if (!process.env[k]) {
+        return NextResponse.json({ error: `Falta variable de entorno: ${k}` }, { status: 500 });
+      }
+    }
+
     await dbConnect();
 
     const user = await getUserFromAuth(req);
@@ -72,39 +72,71 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No autorizado (solo trabajadores)' }, { status: 403 });
     }
 
-    const [fields, files] = await parseForm(req, req.headers);
+    // 👉 sin formidable: usar Web FormData API
+    const form = await req.formData();
 
-    const titulo          = fields.titulo?.[0];
-    const descripcion     = fields.descripcion?.[0];
-    const precioStr       = fields.precio?.[0];
-    const disponibilidad  = fields.disponibilidad?.[0];
-    const fecha           = fields.fecha?.[0];
-    const categoria       = fields.categoria?.[0] || 'general';
-    const file            = files.imagen?.[0];
+    const titulo         = (form.get('titulo') as string | null)?.trim();
+    const descripcion    = (form.get('descripcion') as string | null)?.trim();
+    const precioStr      = (form.get('precio') as string | null)?.trim();
+    const disponibilidad = (form.get('disponibilidad') as string | null)?.trim();
+    const fecha          = (form.get('fecha') as string | null)?.trim();
+    const categoriaRaw   = (form.get('categoria') as string | null)?.trim();
+    const file           = form.get('imagen') as File | null;
 
-    // Validaciones mínimas
+    // Requeridos
     if (!titulo || !descripcion || !precioStr || !disponibilidad || !fecha || !file) {
       return NextResponse.json({ error: 'Faltan campos obligatorios' }, { status: 400 });
     }
 
+    // Precio
     const precio = Number(precioStr);
-    if (Number.isNaN(precio) || precio < 0) {
+    if (!Number.isFinite(precio) || precio <= 0) {
       return NextResponse.json({ error: 'Precio inválido' }, { status: 400 });
     }
 
-    // (Opcional) Validar tipo/tamaño
-    // if (!/^image\//.test(file.mimetype)) return NextResponse.json({ error: 'Archivo no es imagen' }, { status: 400 });
-    // if (file.size > 5 * 1024 * 1024) return NextResponse.json({ error: 'Imagen > 5MB' }, { status: 400 });
+    // Fecha
+    if (!isValidDate(fecha)) {
+      return NextResponse.json({ error: 'Fecha inválida' }, { status: 400 });
+    }
+    if (isPastDate(fecha)) {
+      return NextResponse.json({ error: 'La fecha no puede ser pasada' }, { status: 400 });
+    }
+    const fechaISO = new Date(fecha).toISOString();
 
-    // Subir imagen
-    const subida = await subirImagen(file.filepath, user.id);
+    // Categoría
+    const categoria = categoriaRaw && CATEGORIAS.has(categoriaRaw) ? categoriaRaw : 'general';
 
+    // Imagen (tipo/tamaño)
+    if (!file.type || !ALLOWED_MIME.has(file.type)) {
+      return NextResponse.json({ error: 'Formato de imagen no permitido (JPG, PNG o WEBP)' }, { status: 400 });
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      return NextResponse.json({ error: 'Imagen supera 5MB' }, { status: 413 });
+    }
+
+    // Convertir File (Web API) a Buffer de Node
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // Subir imagen a Cloudinary por stream (sin escribir a disco)
+    let subida: { secure_url: string; public_id: string };
+    try {
+      subida = await subirImagenBuffer(buffer, user.id, file.name);
+    } catch (e: any) {
+      console.error('❌ Error Cloudinary:', e);
+      return NextResponse.json(
+        { error: 'Error al subir imagen a Cloudinary', detail: e?.message ?? String(e) },
+        { status: 502 } // Bad Gateway: upstream (Cloudinary) falló
+      );
+    }
+
+    // Persistir
     const nueva = await Publicacion.create({
       titulo,
       descripcion,
       precio,
       disponibilidad,
-      fecha,
+      fecha: fechaISO,
       categoria,
       imagen: subida.secure_url,
       trabajadorId: user.id,
@@ -113,6 +145,13 @@ export async function POST(req: Request) {
     return NextResponse.json(nueva, { status: 201 });
   } catch (err: any) {
     console.error('❌ Error al crear publicación:', err);
-    return NextResponse.json({ error: err.message ?? 'Error interno' }, { status: 500 });
+    // Si llegara un error por tamaño desde otra capa (ej: proxy)
+    if (
+      String(err?.code).includes('EntityTooLarge') ||
+      String(err?.message || '').toLowerCase().includes('max')
+    ) {
+      return NextResponse.json({ error: 'Archivo demasiado grande (máx 5MB)' }, { status: 413 });
+    }
+    return NextResponse.json({ error: err?.message ?? 'Error interno' }, { status: 500 });
   }
 }
