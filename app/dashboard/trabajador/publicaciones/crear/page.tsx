@@ -30,9 +30,10 @@ export default function CrearPublicacionPage() {
 
   const validateImage = (file: File) => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
-    const maxMB = 5;
+    const maxMB = 4; // ⬅️ alineado con el backend/Netlify
     if (!allowed.includes(file.type)) return 'Formato no permitido (usa JPG, PNG o WEBP).';
     if (file.size > maxMB * 1024 * 1024) return `La imagen no debe pesar más de ${maxMB}MB.`;
+    if (file.size === 0) return 'No se recibió archivo de imagen.';
     return '';
   };
 
@@ -40,6 +41,12 @@ export default function CrearPublicacionPage() {
     const file = e.target.files?.[0];
     setFieldErrors((prev) => ({ ...prev, imagen: '' }));
     if (file) {
+      if (file.size === 0) { // evita enviar “archivo vacío”
+        setImagen(null);
+        setPreview(null);
+        setFieldErrors((prev) => ({ ...prev, imagen: 'No se recibió archivo de imagen.' }));
+        return;
+      }
       const imgErr = validateImage(file);
       if (imgErr) {
         setImagen(null);
@@ -87,25 +94,38 @@ export default function CrearPublicacionPage() {
     formData.append('fecha', fecha);
     formData.append('descripcion', descripcion.trim());
     formData.append('categoria', categoria);
-    if (imagen) formData.append('imagen', imagen);
+    if (imagen) formData.append('imagen', imagen, imagen.name); // preserva nombre
 
     try {
       setSubmitting(true);
       const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+
       await axios.post('/api/publicaciones', formData, {
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          // NO pongas Content-Type: axios lo genera por ser FormData
         },
+        // tiempo extra por si la red está lenta
+        timeout: 60_000,
       });
 
       setMensaje('✅ Publicación creada con éxito');
       setTimeout(() => router.push('/dashboard/trabajador'), 1200);
     } catch (err: any) {
       console.error('Error al crear publicación:', err);
+
+      // si Netlify u otra capa devuelve HTML, axios.data puede ser string
+      const raw = typeof err?.response?.data === 'string' ? err.response.data.slice(0, 160) : null;
+
       const apiMsg =
         err?.response?.data?.message ||
         err?.response?.data?.error ||
+        (err?.response?.status === 413 ? 'La imagen supera el tamaño permitido (4MB).' : null) ||
+        (err?.response?.status === 415 ? 'La solicitud debe ser multipart/form-data.' : null) ||
+        (err?.response?.status === 502 ? 'Falla al subir a Cloudinary.' : null) ||
+        (raw && raw.startsWith('<!DOCTYPE') ? 'Error del servidor (HTML). Reintenta con imagen < 4MB.' : null) ||
         'Error al crear la publicación';
+
       setError(apiMsg);
     } finally {
       setSubmitting(false);
@@ -136,9 +156,7 @@ export default function CrearPublicacionPage() {
             <input
               type="text"
               placeholder="Título del servicio"
-              className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${
-                fieldErrors.titulo ? 'border-red-400' : 'border-gray-300'
-              }`}
+              className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${fieldErrors.titulo ? 'border-red-400' : 'border-gray-300'}`}
               value={titulo}
               onChange={(e) => setTitulo(e.target.value)}
             />
@@ -152,9 +170,7 @@ export default function CrearPublicacionPage() {
             <textarea
               rows={4}
               placeholder="Descripción del servicio"
-              className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${
-                fieldErrors.descripcion ? 'border-red-400' : 'border-gray-300'
-              }`}
+              className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${fieldErrors.descripcion ? 'border-red-400' : 'border-gray-300'}`}
               value={descripcion}
               onChange={(e) => setDescripcion(e.target.value)}
             />
@@ -171,9 +187,7 @@ export default function CrearPublicacionPage() {
                 min="1"
                 step="0.01"
                 placeholder="Precio (MXN)"
-                className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${
-                  fieldErrors.precio ? 'border-red-400' : 'border-gray-300'
-                }`}
+                className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${fieldErrors.precio ? 'border-red-400' : 'border-gray-300'}`}
                 value={precio}
                 onChange={(e) => setPrecio(e.target.value)}
               />
@@ -186,9 +200,7 @@ export default function CrearPublicacionPage() {
               <input
                 type="text"
                 placeholder="Disponibilidad (ej. Mañanas, 9-14h)"
-                className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${
-                  fieldErrors.disponibilidad ? 'border-red-400' : 'border-gray-300'
-                }`}
+                className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${fieldErrors.disponibilidad ? 'border-red-400' : 'border-gray-300'}`}
                 value={disponibilidad}
                 onChange={(e) => setDisponibilidad(e.target.value)}
               />
@@ -203,9 +215,7 @@ export default function CrearPublicacionPage() {
             <div>
               <input
                 type="date"
-                className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${
-                  fieldErrors.fecha ? 'border-red-400' : 'border-gray-300'
-                }`}
+                className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${fieldErrors.fecha ? 'border-red-400' : 'border-gray-300'}`}
                 value={fecha}
                 min={today}
                 onChange={(e) => setFecha(e.target.value)}
@@ -219,9 +229,7 @@ export default function CrearPublicacionPage() {
               <select
                 value={categoria}
                 onChange={(e) => setCategoria(e.target.value)}
-                className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${
-                  fieldErrors.categoria ? 'border-red-400' : 'border-gray-300'
-                }`}
+                className={`w-full rounded-lg px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 ${fieldErrors.categoria ? 'border-red-400' : 'border-gray-300'}`}
               >
                 <option value="" disabled>
                   Selecciona una categoría
