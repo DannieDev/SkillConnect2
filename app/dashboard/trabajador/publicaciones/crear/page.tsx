@@ -9,35 +9,15 @@ type FieldErrors = Partial<Record<
   string
 >>;
 
-// === formateador "Thu Jul 31 2025" (mismo que backend) ===
-function formatDateEnLike(d: string | Date, tz = 'America/Hermosillo') {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-    timeZone: tz,
-  }).formatToParts(new Date(d)) as Intl.DateTimeFormatPart[];
-  const get = (t: Intl.DateTimeFormatPart['type']) => parts.find(p => p.type === t)?.value ?? '';
-  return `${get('weekday')} ${get('month')} ${get('day')} ${get('year')}`.trim();
-}
-
-// "yyyy-MM-dd" -> ISO (evita problemas de huso horario)
-function inputDateToISO(yyyy_mm_dd: string) {
-  const d = new Date(yyyy_mm_dd);
-  if (isNaN(d.getTime())) return yyyy_mm_dd; // fallback sin romper
-  return d.toISOString();
-}
-
 export default function CrearPublicacionPage() {
   const router = useRouter();
 
   const [titulo, setTitulo] = useState('');
   const [precio, setPrecio] = useState('');           // se envía como string pero validamos número
   const [disponibilidad, setDisponibilidad] = useState('');
-  const [fecha, setFecha] = useState('');             // yyyy-MM-dd desde el input
+  const [fecha, setFecha] = useState('');
   const [descripcion, setDescripcion] = useState('');
-  const [categoria, setCategoria] = useState('');     // ⬅ placeholder real
+  const [categoria, setCategoria] = useState('');      // ⬅ placeholder real
   const [imagen, setImagen] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -104,8 +84,7 @@ export default function CrearPublicacionPage() {
     formData.append('titulo', titulo.trim());
     formData.append('precio', precio.trim());
     formData.append('disponibilidad', disponibilidad.trim());
-    // Enviamos ISO (backend lo guarda como Date y puede devolver formateado)
-    formData.append('fecha', inputDateToISO(fecha));
+    formData.append('fecha', fecha);
     formData.append('descripcion', descripcion.trim());
     formData.append('categoria', categoria);
     if (imagen) formData.append('imagen', imagen);
@@ -113,22 +92,13 @@ export default function CrearPublicacionPage() {
     try {
       setSubmitting(true);
       const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-      const res = await axios.post('/api/publicaciones', formData, {
+      await axios.post('/api/publicaciones', formData, {
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        withCredentials: true, // ⬅️ por si tu auth va por cookies (NextAuth)
       });
 
-      // Si el backend devuelve fecha ya formateada, úsala tal cual;
-      // si viniera ISO, la formateamos aquí para el mensaje.
-      const fechaResp = res?.data?.fecha as string | undefined;
-      const bonita =
-        fechaResp
-          ? (fechaResp.includes('T') ? formatDateEnLike(fechaResp) : fechaResp)
-          : formatDateEnLike(inputDateToISO(fecha));
-
-      setMensaje(`✅ Publicación creada con fecha ${bonita}`);
+      setMensaje('✅ Publicación creada con éxito');
       setTimeout(() => router.push('/dashboard/trabajador'), 1200);
     } catch (err: any) {
       console.error('Error al crear publicación:', err);

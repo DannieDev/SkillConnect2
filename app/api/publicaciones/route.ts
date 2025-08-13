@@ -11,6 +11,7 @@ import { subirImagen } from '@/lib/uploadImage';
 
 import formidable, { File as FormidableFile, Fields, Files } from 'formidable';
 import os from 'os';
+import path from 'path';
 import { Readable } from 'stream';
 
 export const runtime = 'nodejs';
@@ -72,19 +73,6 @@ const isValidDate = (d: string) => !Number.isNaN(Date.parse(d));
 const isPastDate = (d: string) => new Date(d).setHours(0,0,0,0) < new Date().setHours(0,0,0,0);
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 
-// --- util: fecha estilo "Thu Jul 31 2025" (sin hora/zonas visibles) ---
-function formatDateEnLike(d: string | Date, tz = 'America/Hermosillo') {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-    timeZone: tz,
-  }).formatToParts(new Date(d)) as Intl.DateTimeFormatPart[];
-  const pick = (t: Intl.DateTimeFormatPart['type']) => parts.find(p => p.type === t)?.value ?? '';
-  return `${pick('weekday')} ${pick('month')} ${pick('day')} ${pick('year')}`.trim();
-}
-
 // ---- POST ----
 export async function POST(req: Request) {
   try {
@@ -138,7 +126,7 @@ export async function POST(req: Request) {
     const categoria = categoriaRaw && CATEGORIAS.has(categoriaRaw) ? categoriaRaw : 'general';
 
     // Imagen (tipo/tamaño)
-    if (!file?.mimetype || !ALLOWED_MIME.has(file.mimetype)) {
+    if (!file.mimetype || !ALLOWED_MIME.has(file.mimetype)) {
       return NextResponse.json({ error: 'Formato de imagen no permitido (usa JPG, PNG o WEBP)' }, { status: 400 });
     }
     if (file.size && file.size > 5 * 1024 * 1024) {
@@ -148,7 +136,7 @@ export async function POST(req: Request) {
     // Subir imagen (Cloud, etc.)
     const subida = await subirImagen(file.filepath, user.id);
 
-    // Persistir (guardar como Date/ISO en BD)
+    // Persistir
     const nueva = await Publicacion.create({
       titulo,
       descripcion,
@@ -160,24 +148,10 @@ export async function POST(req: Request) {
       trabajadorId: user.id,
     });
 
-    // ⛳ Serialización manual: devolvemos fecha como "Thu Jul 31 2025"
-    const salida = {
-      _id: String(nueva._id),
-      titulo: nueva.titulo,
-      descripcion: nueva.descripcion,
-      precio: nueva.precio,
-      disponibilidad: nueva.disponibilidad,
-      fecha: formatDateEnLike(nueva.fecha), // <- forzada al formato deseado
-      categoria: nueva.categoria,
-      imagen: nueva.imagen,
-      trabajadorId: String(nueva.trabajadorId),
-      createdAt: nueva.createdAt,
-      updatedAt: nueva.updatedAt,
-    };
-
-    return NextResponse.json(salida, { status: 201 });
+    return NextResponse.json(nueva, { status: 201 });
   } catch (err: any) {
     console.error('❌ Error al crear publicación:', err);
+    // Si formidable lanza EntityTooLarge (413) u otros
     if (String(err?.code).includes('EntityTooLarge') || String(err?.message).toLowerCase().includes('maxfilesize')) {
       return NextResponse.json({ error: 'Archivo demasiado grande (máx 5MB)' }, { status: 413 });
     }
